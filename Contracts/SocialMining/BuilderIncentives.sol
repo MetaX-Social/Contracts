@@ -5,10 +5,10 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "../Interface/IMetaX.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract BuilderIncentives is Ownable, AccessControl {
+contract BuilderIncentives is AccessControl, Ownable {
 
 /** Roles **/
     bytes32 public constant Admin = keccak256("Admin");
@@ -20,6 +20,7 @@ contract BuilderIncentives is Ownable, AccessControl {
         T0 = _T0;
         Today = _Today;
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(Admin, msg.sender);
     }
 
 /** MetaX Smart Contracts **/
@@ -46,11 +47,11 @@ contract BuilderIncentives is Ownable, AccessControl {
     /* PlanetBadges */
     address public PlanetBadges_Addr;
 
-    IERC721 public PB;
+    IMetaX public PB;
 
     function setPlanetBadges(address _PlanetBadges_Addr) public onlyOwner {
         PlanetBadges_Addr = _PlanetBadges_Addr;
-        PB = IERC721(_PlanetBadges_Addr);
+        PB = IMetaX(_PlanetBadges_Addr);
     }
 
     /* Excess Claimable Builder */
@@ -63,12 +64,19 @@ contract BuilderIncentives is Ownable, AccessControl {
         ECB = IMetaX(_ExcessClaimableBuilder);
     }
 
+/** Daily Reset **/
+    function dailyReset (bytes32 _merkleRoot) external onlyRole(Admin) {
+        Burn();
+        setRoot(_merkleRoot);
+        setToday();
+    }
+
 /** Daily Quota **/
     uint256 public T0;
 
-    uint256 public dailyQuota = 684931.5068493151 ether; /* Halve every 2 years */
+    uint256 public dailyQuota = 684932 ether; /* Halve every 2 years */
 
-    function Halve() public onlyRole(Admin) {
+    function Halve() public onlyOwner {
         require(block.timestamp >= T0 + 730 days, "SocialMining: Halving every 2 years.");
         dailyQuota /= 2;
         for (uint256 i=0; i<Rate.length; i++) {
@@ -80,17 +88,21 @@ contract BuilderIncentives is Ownable, AccessControl {
 
     uint256 public Today;
 
-    uint256 public todayClaimed;
+    uint256 public timeLasting;
+
+    mapping (uint256 => uint256) public todayClaimed;
+
+    mapping (uint256 => uint256) public todayBurnt;
 
     function setToday() public onlyRole(Admin) {
         require(block.timestamp - Today > 1 days, "SocialMining: Still within today.");
         Today += 1 days;
-        todayClaimed = 0;
+        timeLasting++;
     }
 
     function _fixToday(uint256 _today, uint256 _todayClaimed) public onlyRole(Admin) {
         Today = _today;
-        todayClaimed = _todayClaimed;
+        todayClaimed[Today] = _todayClaimed;
     }
 
 /** Builder Incentives Ability **/
@@ -136,42 +148,48 @@ contract BuilderIncentives is Ownable, AccessControl {
         merkleRoot = _merkleRoot;
     }
 
-    function verify(uint256 _POSW, uint256 tokenId_BH, uint256 _PG, bytes32[] calldata merkleProof) public view returns (bool) {
-        bytes32 leaf = keccak256(abi.encodePacked(msg.sender, _POSW, tokenId_BH, _PG));
+    function verify (
+        uint256 tokenId_BH,
+        uint256 _PG,
+        uint256 POSW_Overall,
+        uint256[] memory Id_SocialPlatform,
+        uint256[] memory POSW_SocialPlatform,
+        bytes32[] calldata merkleProof
+    ) public view returns (bool) {
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender, tokenId_BH, _PG, POSW_Overall, Id_SocialPlatform, POSW_SocialPlatform));
         return MerkleProof.verify(merkleProof, merkleRoot, leaf);
     }
 
-    mapping (uint256 => uint256) public recentClaimed; /* SBT tokenId => recent claimed time */
+    mapping (address => uint256) public recentClaimed_Time;
+
+    mapping (address => uint256) public recentClaimed_Tokens;
 
     /* Claim $MetaX for Builder */
-    function Algorithm(uint256 _POSW, uint256 _tokenId_BH, uint256 _PG) public view returns (uint256, uint256) {
-        uint256 amount;
+    function Algorithm(uint256 _POSW, uint256 _tokenId_BH, uint256 _PG) public view returns (uint256 amount, uint256 todayExcess) {
         uint256 _level  = BH.getLevel(_tokenId_BH);
         if (_PG == 1) {
             _level += 3;
         }
         uint256 _rate   = Rate[_level];
         uint256 _limit  = Limit[_level] * 10000;
-        if (PB.balanceOf(msg.sender) >= 10) { 
+        if (PB.getBoostNum(msg.sender) >= 10) { 
             _rate  = _rate * 110 / 100;
             _limit = _limit * 110 / 100;
         }
         uint256 _decimals = 10**14;
         uint256 todayClaimable = _POSW * _rate + ECB._getExcess(_tokenId_BH)/_decimals;
-        uint256 todayExcess;
         if (todayClaimable > _limit) {
             amount = _limit;
             todayExcess = todayClaimable - _limit;
         } else {
             amount = todayClaimable;
         }
-        if (todayClaimed/_decimals + amount > dailyQuota/_decimals) {
-            todayExcess += (todayClaimed/_decimals + amount - dailyQuota/_decimals);
-            amount = dailyQuota/_decimals - todayClaimed/_decimals;
+        if (todayClaimed[Today]/_decimals + amount > dailyQuota/_decimals) {
+            todayExcess += (todayClaimed[Today]/_decimals + amount - dailyQuota/_decimals);
+            amount = dailyQuota/_decimals - todayClaimed[Today]/_decimals;
         }
         amount *= _decimals;
         todayExcess *= _decimals;
-        return(amount, todayExcess);
     }
 
     function Amount(uint256 _POSW, uint256 _tokenId_BH, uint256 _PG) public view returns (uint256) {
@@ -184,21 +202,55 @@ contract BuilderIncentives is Ownable, AccessControl {
         return todayExcess;
     }
 
-    function Claim_Builder (uint256 _POSW, uint256 _tokenId_BH, uint256 _PG, bytes32[] calldata merkleProof) public {
+    function Claim_Builder (
+        uint256 _tokenId_BH,
+        uint256 _PG,
+        uint256 POSW_Overall,
+        uint256[] memory Id_SocialPlatform,
+        uint256[] memory POSW_SocialPlatform,
+        bytes32[] calldata merkleProof
+    ) public {
         require(IERC721(BlackHole_Addr).ownerOf(_tokenId_BH) == msg.sender, "BuilderIncentives: You are not the owner of this SBT.");
-        require(verify(_POSW, _tokenId_BH, _PG, merkleProof), "BuilderIncentives: Incorrect POSW.");
+        require(verify(_tokenId_BH, _PG, POSW_Overall, Id_SocialPlatform, POSW_SocialPlatform, merkleProof), "BuilderIncentives: Incorrect POSW.");
         require(block.timestamp <= Today + 1 days, "BuilderIncentives: Today's claiming process has not started.");
-        require(recentClaimed[_tokenId_BH] < Today, "BuilderIncentives: You can claim only once per day.");
-        require(todayClaimed < dailyQuota, "BuilderIncentives: Exceed today's limit.");
-        uint256 amount = Amount(_POSW, _tokenId_BH, _PG);
-        uint256 todayExcess = Excess(_POSW, _tokenId_BH, _PG);
+        require(recentClaimed_Time[msg.sender] < Today, "BuilderIncentives: You can claim only once per day.");
+        require(todayClaimed[Today] < dailyQuota, "BuilderIncentives: Exceed today's limit.");
+        uint256 amount = Amount(POSW_Overall, _tokenId_BH, _PG);
+        uint256 todayExcess = Excess(POSW_Overall, _tokenId_BH, _PG);
         MX.transfer(msg.sender, amount);
-        todayClaimed += amount;
+        todayClaimed[Today] += amount;
+        recentClaimed_Tokens[msg.sender] = amount;
         ECB._setExcess(_tokenId_BH, todayExcess);
-        recentClaimed[_tokenId_BH] = block.timestamp;
-        BH._addPOSW(_tokenId_BH, _POSW);
-        emit builderClaimRecord(msg.sender, _tokenId_BH, _POSW, amount, todayExcess, block.timestamp);
+        recentClaimed_Time[msg.sender] = block.timestamp;
+        BH.addPOSW_Builder(_tokenId_BH, POSW_Overall, Id_SocialPlatform, POSW_SocialPlatform);
+        emit builderClaimRecord(msg.sender, _tokenId_BH, POSW_Overall, amount, todayExcess, block.timestamp);
     }
 
     event builderClaimRecord(address indexed builder, uint256 indexed _tokenId, uint256 _POSW, uint256 indexed $MetaX, uint256 Excess, uint256 _time);
+
+/** Burn **/
+    function Burn () public onlyRole(Admin) {
+        require(block.timestamp - Today > 1 days, "Builder Incentives: Still within today.");
+        require(todayClaimed[Today] != 0, "Builder Incentives: Builder Incentives has been reset.");
+        uint256 balance = MX.balanceOf(address(this));
+        uint256 unclaimed = dailyQuota - todayClaimed[Today];
+        uint256 amount;
+        if (unclaimed > balance) {
+            amount = balance;
+        } else {
+            amount = unclaimed;
+        }
+        IMetaX(MetaX_Addr).Burn(address(this), amount);
+        todayBurnt[Today] += amount;
+        emit burnRecord(amount, block.timestamp);
+    }
+
+    function Burn_Amount (uint256 amount) public onlyOwner {
+        require(amount <= MX.balanceOf(address(this)));
+        IMetaX(MetaX_Addr).Burn(address(this), amount);
+        todayBurnt[Today] += amount;
+        emit burnRecord(amount, block.timestamp);
+    }
+
+    event burnRecord(uint256 burnAmount, uint256 time);
 }
