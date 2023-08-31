@@ -5,15 +5,13 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "../Interface/IMetaX.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract SocialMining is AccessControl, Ownable {
 
 /** Roles **/
     bytes32 public constant Admin = keccak256("Admin");
-
-    bytes32 public constant Claimer = keccak256("Claimer");
 
     constructor(
         uint256 _T0,
@@ -22,6 +20,7 @@ contract SocialMining is AccessControl, Ownable {
         T0 = _T0;
         Today = _Today;
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(Admin, msg.sender);
     }
 
 /** Smart Contracts Preset **/
@@ -30,7 +29,7 @@ contract SocialMining is AccessControl, Ownable {
 
     IERC20 public MX;
 
-    function setMetaX(address _MetaX_Addr) public onlyOwner {
+    function setMetaX (address _MetaX_Addr) public onlyOwner {
         MetaX_Addr = _MetaX_Addr;
         MX = IERC20(_MetaX_Addr);
     }
@@ -40,7 +39,7 @@ contract SocialMining is AccessControl, Ownable {
 
     IMetaX public PM;
 
-    function setPlanetMan(address _PlanetMan_XPower) public onlyOwner {
+    function setPlanetMan (address _PlanetMan_XPower) public onlyOwner {
         PlanetMan_XPower = _PlanetMan_XPower;
         PM = IMetaX(_PlanetMan_XPower);
     }
@@ -50,7 +49,7 @@ contract SocialMining is AccessControl, Ownable {
 
     IMetaX public POSW;
 
-    function setPOSW(address _POSW_Addr) public onlyOwner {
+    function setPOSW (address _POSW_Addr) public onlyOwner {
         POSW_Addr = _POSW_Addr;
         POSW = IMetaX(_POSW_Addr);
     }
@@ -58,11 +57,11 @@ contract SocialMining is AccessControl, Ownable {
     /* PlanetBadges */
     address public PlanetBadges_Addr;
 
-    IERC721 public PB;
+    IMetaX public PB;
 
-    function setPlanetBadges(address _PlanetBadges_Addr) public onlyOwner {
+    function setPlanetBadges (address _PlanetBadges_Addr) public onlyOwner {
         PlanetBadges_Addr = _PlanetBadges_Addr;
-        PB = IERC721(_PlanetBadges_Addr);
+        PB = IMetaX(_PlanetBadges_Addr);
     }
 
     /* Excess Claimable User */
@@ -70,24 +69,24 @@ contract SocialMining is AccessControl, Ownable {
 
     IMetaX public ECU;
 
-    function setExcessClaimableUser(address _ExcessClaimableUser) public onlyOwner {
+    function setExcessClaimableUser (address _ExcessClaimableUser) public onlyOwner {
         ExcessClaimableUser = _ExcessClaimableUser;
         ECU = IMetaX(_ExcessClaimableUser);
     }
 
-    /* Vault */
-    address public Vault;
-
-    function setVault(address _Vault) public onlyOwner {
-        Vault = _Vault;
+/** Daily Reset **/
+    function dailyReset (bytes32 _merkleRoot) external onlyRole(Admin) {
+        Burn();
+        setRoot(_merkleRoot);
+        setToday();
     }
 
 /** Daily Quota **/
     uint256 public T0;
 
-    uint256 public dailyQuota = 5479452.054794521 ether; /* Halve every 2 years */
+    uint256 public dailyQuota = 5479452 ether; /* Halve every 2 years */
 
-    function Halve() public onlyRole(Admin) {
+    function Halve() public onlyOwner {
         require(block.timestamp >= T0 + 730 days, "SocialMining: Halving every 2 years.");
         dailyQuota /= 2;
         for (uint256 i=0; i<Rate.length; i++) {
@@ -101,22 +100,26 @@ contract SocialMining is AccessControl, Ownable {
 
     uint256 public Today;
 
-    uint256 public todayClaimed;
+    uint256 public timeLasting;
 
-    function setToday() public onlyRole(Admin) {
+    mapping (uint256 => uint256) public todayClaimed;
+
+    mapping (uint256 => uint256) public todayBurnt;
+
+    function setToday () public onlyRole(Admin) {
         require(block.timestamp - Today > 1 days, "SocialMining: Still within today.");
         Today += 1 days;
-        todayClaimed = 0;
+        timeLasting++;
     }
 
-    function _fixToday(uint256 _today, uint256 _todayClaimed) public onlyRole(Admin) {
+    function _fixToday (uint256 _today, uint256 _todayClaimed) public onlyRole(Admin) {
         Today = _today;
-        todayClaimed = _todayClaimed;
+        todayClaimed[Today] = _todayClaimed;
     }
 
 /** Social Mining Ability **/
-    function Rarity(uint256 _tokenId) public pure returns (uint256 rarity) {
-        require(_tokenId <= 10000, "SocialMining: Token not exist.");
+    function Rarity (uint256 _tokenId) public pure returns (uint256 rarity) {
+        require(_tokenId != 0 && _tokenId <= 10000, "SocialMining: Token not exist.");
         if (0<_tokenId && _tokenId<=50) {
             rarity = 4;
         } else if (50<_tokenId && _tokenId<=500) {
@@ -150,116 +153,184 @@ contract SocialMining is AccessControl, Ownable {
     /* POSW Verification for User */
     bytes32 public merkleRoot;
 
-    function setRoot(bytes32 _merkleRoot) public onlyRole(Admin) {
+    function setRoot (bytes32 _merkleRoot) public onlyRole(Admin) {
         merkleRoot = _merkleRoot;
     }
 
-    function verify(uint256 _POSW, uint256 _tokenId_PM, uint256 _PG, bytes32[] calldata merkleProof) public view returns (bool) {
-        bytes32 leaf = keccak256(abi.encodePacked(msg.sender, _POSW, _tokenId_PM, _PG));
+    function flattenArray (uint256[][] memory data) internal pure returns (uint256[] memory) {
+        uint256 size = 0;
+        for (uint256 i = 0; i < data.length; i++) {
+            size += data[i].length;
+        }
+        uint256[] memory flatArray = new uint256[](size);
+        uint256 index = 0;
+        for (uint256 i = 0; i < data.length; i++) {
+            for (uint256 j = 0; j < data[i].length; j++) {
+                flatArray[index] = data[i][j];
+                index++;
+            }
+        }
+        return flatArray;
+    }
+
+    function Verify (
+        uint256 _tokenId_PM,
+        uint256 _PG,
+        uint256 _POSW_Overall,
+        uint256[] memory Id_SocialPlatform,
+        uint256[] memory Id_Community,
+        uint256[] memory POSW_SocialPlatform,
+        uint256[] memory POSW_Community,
+        uint256[][] memory POSW_SocialPlatform_Community,
+        bytes32[] calldata merkleProof
+    ) public view returns (bool) {
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender, _tokenId_PM, _PG, _POSW_Overall, Id_SocialPlatform, Id_Community, POSW_SocialPlatform, POSW_Community, flattenArray(POSW_SocialPlatform_Community)));
         return MerkleProof.verify(merkleProof, merkleRoot, leaf);
     }
 
-    mapping (address => uint256) public recentClaimed_Wallet;
+    mapping (address => uint256) public recentClaimed_Time;
+
+    function getRecentClaimed_Time (address user) external view returns (uint256) {
+        return recentClaimed_Time[user];
+    }
+
+    mapping (address => uint256) public recentClaimed_Tokens;
 
     mapping (uint256 => uint256) public recentClaimed_PM;
 
-    /* Claim $MetaX for User */
-    function Algorithm(uint256 _POSW, uint256 _tokenId_PM, uint256 _PG) public view returns (uint256, uint256) {
-        uint256 amount;
-        uint256 _rarity = 2; // Rarity(_tokenId_PM); rarity equals to 3 during final test
+    /* $MetaX Calculation */
+    function Algorithm (uint256 _POSW, uint256 _tokenId_PM, uint256 _PG) internal view returns (uint256 amount, uint256 todayExcess) {
+        uint256 _rarity = Rarity(_tokenId_PM);
         uint256 _level  = PM.getLevel(_tokenId_PM);
         if (_PG == 1) {
             _level += 3;
         }
         uint256 _rate   = Rate[_rarity][_level];
         uint256 _limit  = Limit[_rarity][_level] * 10000;
-        if (PB.balanceOf(msg.sender) >= 10) { 
+        if (PB.getBoostNum(msg.sender) >= 10) { 
             _rate  = _rate * 110 / 100;
             _limit = _limit * 110 / 100;
         }
         uint256 _decimals = 10**15;
-        uint256 todayClaimable = _POSW * _rate + ECU.getExcess(msg.sender)/_decimals;
-        uint256 todayExcess;
+        uint256 todayClaimable = _POSW * _rate + (ECU.getExcess(msg.sender)/_decimals);
         if (todayClaimable > _limit) {
             amount = _limit;
             todayExcess = todayClaimable - _limit;
         } else {
             amount = todayClaimable;
         }
-        if (todayClaimed/_decimals + amount > dailyQuota/_decimals) {
-            todayExcess += (todayClaimed/_decimals + amount - dailyQuota/_decimals);
-            amount = (dailyQuota - todayClaimed)/_decimals;
+        if (todayClaimed[Today]/_decimals + amount > dailyQuota/_decimals) {
+            todayExcess += (todayClaimed[Today]/_decimals + amount - dailyQuota/_decimals);
+            amount = (dailyQuota - todayClaimed[Today])/_decimals;
         }
         amount *= _decimals;
         todayExcess *= _decimals;
-        return (amount, todayExcess);
     }
 
-    function Amount(uint256 _POSW, uint256 _tokenId_PM, uint256 _PG) public view returns (uint256) {
+    function Amount (uint256 _POSW, uint256 _tokenId_PM, uint256 _PG) public view returns (uint256) {
         (uint256 amount, ) = SocialMining.Algorithm(_POSW, _tokenId_PM, _PG);
         return amount;
     }
 
-    function Excess(uint256 _POSW, uint256 _tokenId_PM, uint256 _PG) public view returns (uint256) {
+    function Excess (uint256 _POSW, uint256 _tokenId_PM, uint256 _PG) public view returns (uint256) {
         (, uint256 todayExcess) = SocialMining.Algorithm(_POSW, _tokenId_PM, _PG);
         return todayExcess;
     }
 
-    function Claim_User (uint256 _POSW, uint256 _tokenId_PM, uint256 _PG, bytes32[] calldata merkleProof) public {
-        require(verify(_POSW, _tokenId_PM, _PG, merkleProof), "SocialMining: Fail to verify your Identity or POSW.");
+    /* Claim $MetaX */
+    function Claim_User (
+        uint256 _tokenId_PM,
+        uint256 _PG,
+        uint256 POSW_Overall,
+        uint256[] memory Id_SocialPlatform,
+        uint256[] memory Id_Community,
+        uint256[] memory POSW_SocialPlatform,
+        uint256[] memory POSW_Community,
+        uint256[][] memory POSW_SocialPlatform_Community,
+        bytes32[] calldata merkleProof
+    ) public {
+        require(Verify(_tokenId_PM, _PG, POSW_Overall, Id_SocialPlatform, Id_Community, POSW_SocialPlatform, POSW_Community, POSW_SocialPlatform_Community, merkleProof), "SocialMining: Fail to verify your Identity or POSW.");
         require(block.timestamp <= Today + 1 days, "SocialMining: Today's claiming process has not started.");
-        require(recentClaimed_Wallet[msg.sender] < Today, "SocialMining: Every Wallet can claim only once per day.");
+        require(recentClaimed_Time[msg.sender] < Today, "SocialMining: Every Wallet can claim only once per day.");
         require(recentClaimed_PM[_tokenId_PM] < Today, "SocialMining: Every PlanetMan can claim only once per day.");
-        require(todayClaimed < dailyQuota, "SocialMining: Exceed today's limit.");
-        uint256 amount = Amount(_POSW, _tokenId_PM, _PG);
-        uint256 todayExcess = Excess(_POSW, _tokenId_PM, _PG);
+        require(todayClaimed[Today] < dailyQuota, "SocialMining: Exceed today's limit.");
+        uint256 amount = Amount(POSW_Overall, _tokenId_PM, _PG);
+        uint256 todayExcess = Excess(POSW_Overall, _tokenId_PM, _PG);
         MX.transfer(msg.sender, amount);
-        todayClaimed += amount;
+        todayClaimed[Today] += amount;
+        recentClaimed_Tokens[msg.sender] = amount;
         ECU.setExcess(msg.sender, todayExcess);
-        recentClaimed_Wallet[msg.sender] = block.timestamp;
+        recentClaimed_Time[msg.sender] = block.timestamp;
         recentClaimed_PM[_tokenId_PM] = block.timestamp;
-        POSW.addPOSW(msg.sender, _POSW);
-        PM._addPOSW(_tokenId_PM, _POSW);
-        emit userClaimRecord(msg.sender, _tokenId_PM, _POSW, amount, todayExcess, block.timestamp);
+        POSW.addPOSW_User(msg.sender, POSW_Overall, Id_SocialPlatform, Id_Community, POSW_SocialPlatform, POSW_Community, POSW_SocialPlatform_Community);
+        PM.addPOSW_PM(_tokenId_PM, POSW_Overall);
+        emit userClaimRecord(msg.sender, _tokenId_PM, POSW_Overall, amount, todayExcess, block.timestamp);
     }
 
-    event userClaimRecord(address indexed user, uint256 _tokenId, uint256 indexed _posw, uint256 indexed $MetaX, uint256 Excess, uint256 _time);
+    event userClaimRecord(address user, uint256 _tokenId, uint256 _POSW, uint256 $MetaX, uint256 Excess, uint256 _time);
 
-/** Extended - User Social Mining with Derivative Series **/
-    bool public extensionOpen;
+/** Add POSW Without Claiming **/
+    bytes32 public merkleRoot_addPOSW;
 
-    function setExtension() public onlyOwner {
-        extensionOpen = true;
+    function setRoot_addPOSW (bytes32 _merkleRoot) public onlyRole(Admin) {
+        merkleRoot = _merkleRoot;
     }
 
-    uint256 public Shares; /* In Basis Points */
-
-    function setShare(uint256 _Shares) public onlyOwner {
-        Shares = _Shares;
+    function Verify_addPOSW (
+        uint256 _POSW_Overall,
+        uint256[] memory Id_SocialPlatform,
+        uint256[] memory Id_Community,
+        uint256[] memory POSW_SocialPlatform,
+        uint256[] memory POSW_Community,
+        uint256[][] memory POSW_SocialPlatform_Community,
+        bytes32[] calldata merkleProof
+    ) public view returns (bool) {
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender, _POSW_Overall, Id_SocialPlatform, Id_Community, POSW_SocialPlatform, POSW_Community, flattenArray(POSW_SocialPlatform_Community)));
+        return MerkleProof.verify(merkleProof, merkleRoot, leaf);
     }
 
-    function Claim_Derivatives (uint256 _POSW, uint256 _tokenId_PM, uint256 _PG, uint256 _BlackList, bytes32[] calldata merkleProof) public {
-        require(extensionOpen, "SocialMining: Social Mining by Extended Series is not open.");
-        require(_BlackList != 1, "SocialMining: You are blacklisted due to suspicious social behaviors.");
-        require(verify(_POSW, _tokenId_PM, _PG, merkleProof), "SocialMining: Fail to verify your Identity or POSW.");
+    function addPOSW (
+        uint256 POSW_Overall,
+        uint256[] memory Id_SocialPlatform,
+        uint256[] memory Id_Community,
+        uint256[] memory POSW_SocialPlatform,
+        uint256[] memory POSW_Community,
+        uint256[][] memory POSW_SocialPlatform_Community,
+        bytes32[] calldata merkleProof
+    ) public {
+        require(Verify_addPOSW(POSW_Overall, Id_SocialPlatform, Id_Community, POSW_SocialPlatform, POSW_Community, POSW_SocialPlatform_Community, merkleProof), "SocialMining: Fail to verify your POSW.");
         require(block.timestamp <= Today + 1 days, "SocialMining: Today's claiming process has not started.");
-        require(recentClaimed_Wallet[msg.sender] < Today, "SocialMining: Every Wallet can claim only once per day.");
-        require(recentClaimed_PM[_tokenId_PM] < Today, "SocialMining: Every PlanetMan can claim only once per day.");
-        require(todayClaimed < dailyQuota, "SocialMining: Exceed today's limit.");
-        uint256 amount = Amount(_POSW, _tokenId_PM, _PG);
-        uint256 _share = amount * Shares / 10000;
-        uint256 _amount = amount - _share;
-        uint256 todayExcess = Excess(_POSW, _tokenId_PM, _PG);
-        MX.transfer(msg.sender, _amount);
-        MX.transfer(Vault, _share);
-        todayClaimed += amount;
-        ECU.setExcess(msg.sender, todayExcess);
-        recentClaimed_Wallet[msg.sender] = block.timestamp;
-        recentClaimed_PM[_tokenId_PM] = block.timestamp;
-        POSW.addPOSW(msg.sender, _POSW);
-        PM._addPOSW(_tokenId_PM, _POSW);
-        emit userClaimRecord_Derivative(msg.sender, _tokenId_PM, _POSW, _amount, _share, todayExcess, block.timestamp);
+        require(recentClaimed_Time[msg.sender] < Today, "SocialMining: Every Wallet can claim only once per day.");
+        POSW.addPOSW_User(msg.sender, POSW_Overall, Id_SocialPlatform, Id_Community, POSW_SocialPlatform, POSW_Community, POSW_SocialPlatform_Community);
+        recentClaimed_Time[msg.sender] = block.timestamp;
+        emit addPOSW_Record(msg.sender, POSW_Overall, block.timestamp);
     }
 
-    event userClaimRecord_Derivative(address indexed user, uint256 _tokenId, uint256 indexed _posw, uint256 indexed $MetaX, uint256 share, uint256 Excess, uint256 _time);
+    event addPOSW_Record (address user, uint256 posw, uint256 time);
+
+/** Burn **/
+    function Burn () public onlyRole(Admin) {
+        require(block.timestamp - Today > 1 days, "SocialMining: Still within today.");
+        require(todayClaimed[Today] != 0, "SocialMining: Social Mining has been reset.");
+        uint256 balance = MX.balanceOf(address(this));
+        uint256 unclaimed = dailyQuota - todayClaimed[Today];
+        uint256 amount;
+        if (unclaimed > balance) {
+            amount = balance;
+        } else {
+            amount = unclaimed;
+        }
+        IMetaX(MetaX_Addr).Burn(address(this), amount);
+        todayBurnt[Today] += amount;
+        emit burnRecord(amount, block.timestamp);
+    }
+
+    function Burn_Amount (uint256 amount) public onlyOwner {
+        require(amount <= MX.balanceOf(address(this)));
+        IMetaX(MetaX_Addr).Burn(address(this), amount);
+        todayBurnt[Today] += amount;
+        emit burnRecord(amount, block.timestamp);
+    }
+
+    event burnRecord(uint256 burnAmount, uint256 time);
 }
