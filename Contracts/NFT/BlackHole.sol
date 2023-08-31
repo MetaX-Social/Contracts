@@ -4,116 +4,110 @@ pragma solidity ^0.8.18;
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/Strings.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-contract BlackHole is ERC721, AccessControl, Ownable, ReentrancyGuard {
+contract BlackHole is ERC721, AccessControl, Ownable {
 
 /** Roles **/
     bytes32 public constant Admin = keccak256("Admin");
 
     bytes32 public constant Claimer = keccak256("Claimer");
 
-    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC721, AccessControl) returns (bool) {
+    bytes32 public constant Requestor = keccak256("Requestor");
+
+    function supportsInterface(bytes4 interfaceId) public view virtual override (ERC721, AccessControl) returns (bool) {
         return super.supportsInterface(interfaceId);
     }
 
-    constructor (
-        string[] memory initialTypes
-    ) ERC721("BalckHole", "BlackHole") {
-        communityTypes = initialTypes;
+    constructor () ERC721("BlackHole", "BlackHole") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-    }
-
-/** Community Types **/
-    string[] public communityTypes;
-
-    function updateType(uint256 batch, string memory _communityTypes) public onlyRole(Admin) {
-        if (batch < communityTypes.length) {
-            communityTypes[batch] = _communityTypes;
-        } else {
-            communityTypes.push(_communityTypes);
-        }
+        _grantRole(Admin, msg.sender);
     }
 
 /** Metadata **/
-    string[] public baseURI;
+    string public baseURI;
 
-    function setBaseURI(uint256 batch, string memory newBaseURI) public onlyRole(Admin) nonReentrant {
-        if (batch < baseURI.length) {
-            baseURI[batch] = newBaseURI;
-        } else {
-            baseURI.push(newBaseURI);
-        }
+    function setBaseURI(string memory newBaseURI) public onlyOwner {
+        baseURI = newBaseURI;
     }
 
     function tokenURI(uint256 _tokenId) public view override returns (string memory) {
         require(_exists(_tokenId), "BlackHole: Token not exist.");
-        uint256 type_ = Community[_tokenId]._type;
-        return bytes(baseURI[type_]).length > 0 ? string(abi.encodePacked(baseURI[type_], Strings.toString(_tokenId), ".json")) : "";
+        return bytes(baseURI).length > 0 ? string(abi.encodePacked(baseURI, Strings.toString(_tokenId), ".json")) : "";
     }
 
 /** Community Deploy **/
     struct _community {
-        uint256 _type;
-        string[] communityId; /* 0=>Discord | 1=>Twitter | Continues... */
-        uint256 POSW;
+        string name;
+        uint256 _type; /* 0=>Builder | 1=>KOL | 2=>DAO | 3=>Investors | Continues... */
+        mapping (uint256 => string) communityId; /* 1=>Twitter | 2=>Discord | 3=>Youtube | 4=>Telegram | Continues... */
         uint256 level;
-        uint256 birthday;
+        uint256 deployTime;
     }
 
     mapping (uint256 => _community) public Community;
 
-    function updateTypeByCommunity(uint256 _tokenId, uint256 type_) public onlyRole(Admin) {
+    function Deploy (uint256 _tokenId, string calldata _name, uint256 type_, uint256 batch, string calldata _communityId) public {
+        require(ownerOf(_tokenId) == msg.sender || hasRole(Admin, msg.sender), "BlackHole: Only Owner or Admin can deploy.");
+        Community[_tokenId].name = _name;
         Community[_tokenId]._type = type_;
+        Community[_tokenId].communityId[batch] = _communityId;
     }
 
-    function Deploy(uint256 _tokenId, uint256 batch, string calldata _communityId) public onlyRole(Admin) {
-        if (batch < Community[_tokenId].communityId.length) {
-            Community[_tokenId].communityId[batch] = _communityId;
-        } else {
-            Community[_tokenId].communityId.push(_communityId);
-        }
-    }
-
-/** Community Info **/
-    function getCommunityId(uint256 _tokenId, uint256 batch) external view returns (string memory) {
-        return Community[_tokenId].communityId[batch];
-    }
-
-    function getCommunityType(uint256 _tokenId) external view returns (string memory) {
-        uint256 _type = Community[_tokenId]._type;
-        return communityTypes[_type];
-    }
-
-    function getCommunityBirth(uint256 _tokenId) external view returns (uint256) {
-        return Community[_tokenId].birthday;
-    }
-
-/** POSW of Builders **/
-    function _addPOSW(uint256 _tokenId, uint256 _POSW) external onlyRole(Claimer) nonReentrant {
-        require(_exists(_tokenId), "BlackHole: Token not exist.");
-        Community[_tokenId].POSW += _POSW;
-    }
-
-    function getPOSW(uint256 _tokenId) external view returns (uint256) {
-        return Community[_tokenId].POSW;
-    }
-
-    function getLevel(uint256 _tokenId) external view returns (uint256) {
+    /* Community Level */
+    function getLevel (uint256 _tokenId) external view returns (uint256) {
         return Community[_tokenId].level;
     }
 
-    function levelUp(uint256 _tokenId) external onlyRole(Claimer) {
+    function levelUp (uint256 _tokenId) external onlyRole(Claimer) {
         require(Community[_tokenId].level < 9, "BlackHole: You have reached the highest level.");
         Community[_tokenId].level++;
+    }
+
+/** POSW of Builders **/
+    struct _POSW_Builder {
+        uint256 POSW;
+        mapping (uint256 => uint256) POSW_SocialPlatform;
+    }
+
+    mapping (uint256 => _POSW_Builder) private POSW_Builder;
+
+    /* Global POSW */
+    uint256 public POSW_Global;
+
+    mapping (uint256 => uint256) public POSW_Global_SocialPlatform;
+
+    function addPOSW_Builder (uint256 _tokenId, uint256 _POSW, uint256[] memory Id_SocialPlatform, uint256[] memory POSW_SocialPlatform) external onlyRole(Claimer) {
+        require(_exists(_tokenId), "BlackHole: Token not exist.");
+        POSW_Builder[_tokenId].POSW += _POSW;
+        for (uint256 i=0; i<Id_SocialPlatform.length; i++) {
+            POSW_Builder[_tokenId].POSW_SocialPlatform[Id_SocialPlatform[i]] += POSW_SocialPlatform[i];
+            POSW_Global_SocialPlatform[Id_SocialPlatform[i]] += POSW_SocialPlatform[i];
+        }
+    }
+
+    function getPOSW_Builder (uint256 _tokenId) external view onlyRole(Requestor) returns (uint256) {
+        return POSW_Builder[_tokenId].POSW;
+    }
+
+    function getPOSW_Builder_Owner (uint256 _tokenId) external view returns (uint256) {
+        require(ownerOf(_tokenId) == msg.sender, "BlackHole: You are not the owner of this SBT.");
+        return POSW_Builder[_tokenId].POSW;
+    }
+
+    function getPOSW_Builder_SocialPlatform (uint256 _tokenId, uint256 _socialPlatform) external view onlyRole(Requestor) returns (uint256) {
+        return POSW_Builder[_tokenId].POSW_SocialPlatform[_socialPlatform];
+    }
+
+    function getPOSW_Builder_SocialPlatform_Owner (uint256 _tokenId, uint256 _socialPlatform) external view returns (uint256) {
+        require(ownerOf(_tokenId) == msg.sender, "BlackHole: You are not the owner of this SBT.");
+        return POSW_Builder[_tokenId].POSW_SocialPlatform[_socialPlatform];
     }
 
 /** Whitelist **/
     bytes32 public merkleRoot;
 
-    function setWhitelist(bytes32 _merkleRoot) public onlyRole(Admin) nonReentrant {
+    function setWhitelist(bytes32 _merkleRoot) public onlyRole(Admin) {
         merkleRoot = _merkleRoot;
     }
 
@@ -123,21 +117,17 @@ contract BlackHole is ERC721, AccessControl, Ownable, ReentrancyGuard {
     }
 
 /** Mint **/
-    uint256 private tokenId;
-
-    function numberMinted() public view returns (uint256) {
-        return tokenId;
-    }
+    uint256 public tokenId;
 
     function totalSupply() external view returns (uint256) {
         return tokenId;
     }
 
     function Price() public view returns (uint256 price) {
-        if (numberMinted() >= 100) {
-            price = 300 + (numberMinted() - 100) * 10;
+        if (tokenId >= 50) {
+            price = 0.01 ether + (tokenId - 50) * 0.01 ether;
         } else {
-            price = 0;
+            price = 0 ether;
         }
     }
 
@@ -147,24 +137,33 @@ contract BlackHole is ERC721, AccessControl, Ownable, ReentrancyGuard {
         return wallet_token[owner];
     }
 
-    function Mint(address owner, uint256 _airdrop, bytes32[] calldata merkleProof) public payable {
-        require(tx.origin == msg.sender, "BlackHole: Contract not allowed.");
-        require(_airdrop == 0 || _airdrop == 1, "BlackHole: Incorrect airdrop input.");
+    mapping (address => bool) public alreadyMinted;
+
+    function Mint (address owner, uint256 _airdrop, bytes32[] calldata merkleProof) public payable {
+        require(!alreadyMinted[owner], "BlackHole: You have already minted your SBT.");
         require(verify(owner, _airdrop, merkleProof), "BlackHole: You are not in the whitelist.");
-        if (_airdrop != 1) {
-            require(msg.value >= Price() * 1 ether, "BlackHole: Not enough payment.");
+        if (_airdrop == 0) {
+            require(msg.value >= Price(), "BlackHole: Not enough payment.");
         }
         tokenId++;
         _safeMint(owner, tokenId);
-
-        Community[tokenId].birthday = block.timestamp;
-
+        Community[tokenId].deployTime = block.timestamp;
         wallet_token[owner].push(tokenId);
-
+        alreadyMinted[owner] = true;
         emit mintRecord(owner, tokenId, block.timestamp);
     }
 
-    event mintRecord(address indexed owner, uint256 indexed tokenId, uint256 indexed time);
+    function Airdrop (address owner) public onlyRole(Admin) {
+        require(!alreadyMinted[owner], "BlackHole: You have already minted your SBT.");
+        tokenId++;
+        _safeMint(owner, tokenId);
+        Community[tokenId].deployTime = block.timestamp;
+        wallet_token[owner].push(tokenId);
+        alreadyMinted[owner] = true;
+        emit mintRecord(owner, tokenId, block.timestamp);
+    }
+
+    event mintRecord(address owner, uint256 tokenId, uint256 time);
 
 /** Soul Bound Token **/
     function _beforeTokenTransfer(address from, address to, uint256 firstTokenId, uint256 batchSize) internal virtual override {
@@ -176,18 +175,11 @@ contract BlackHole is ERC721, AccessControl, Ownable, ReentrancyGuard {
     function Burn(uint256 _tokenId) public {
         require(ownerOf(_tokenId) == msg.sender, "BlackHole: You are not the owner of this SBT.");
         _burn(_tokenId);
-        uint256[] storage token = wallet_token[msg.sender];
-        for (uint256 i=0; i<token.length; i++) {
-            if(token[i] == tokenId) {
-                token[i] = token[token.length - 1];
-                token.pop();
-                break;
-            }
-        }
+        delete wallet_token[msg.sender];
     }
 
 /** Withdraw **/
-    function Withdraw(address recipient) public payable onlyOwner {
+    function Withdraw(address recipient) public onlyOwner {
         payable(recipient).transfer(address(this).balance);
     }
 }
