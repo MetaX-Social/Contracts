@@ -130,7 +130,7 @@ contract $MetaX is ERC20, AccessControl, Ownable {
 /** Burn **/
     uint256 public numberBurnt;
 
-    function Burn (address sender, uint256 amount) external {
+    function Burn (address sender, uint256 amount) external onlyRole(Burner) {
         require(balanceOf(sender) >= amount, "$MetaX: You don't have enough amount of $MetaX.");
         _burn(sender, amount);
         numberBurnt += amount;
